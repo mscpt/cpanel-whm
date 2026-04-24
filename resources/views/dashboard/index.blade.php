@@ -66,7 +66,7 @@
             <div class="flex-shrink-0 text-center">
                 <div class="w-4 h-4 rounded-full mx-auto mb-1" style="background-color: {{ $stage->color }}"></div>
                 <p class="text-xs text-gray-500">{{ $stage->name }}</p>
-                <p class="text-lg font-bold" style="color: {{ $stage->color }}">{{ $stage->leads->count() }}</p>
+                <p class="text-lg font-bold" style="color: {{ $stage->color }}">{{ $stage->leads_count }}</p>
             </div>
             @endforeach
         </div>

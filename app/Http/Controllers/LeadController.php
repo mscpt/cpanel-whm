@@ -12,7 +12,7 @@ class LeadController extends Controller
 {
     public function index(Request $request)
     {
-        $pipelineId = $request->pipeline_id ?? Pipeline::first()?->id;
+        $pipelineId = $request->pipeline_id ?? Pipeline::value('id');
         $pipeline   = Pipeline::with(['stages.leads' => function ($q) use ($request) {
             $q->with('client', 'assignedUser')
               ->when($request->assigned_to, fn($q, $u) => $q->where('assigned_to', $u))
@@ -28,29 +28,14 @@ class LeadController extends Controller
 
     public function create(Request $request)
     {
-        $pipelines = Pipeline::with('stages')->get();
-        $clients   = Client::orderBy('name')->get();
-        $users     = User::where('is_active', true)->get();
-        $leadId    = $request->pipeline_id;
+        [$pipelines, $clients, $users] = $this->formData();
 
-        return view('leads.create', compact('pipelines', 'clients', 'users', 'leadId'));
+        return view('leads.create', compact('pipelines', 'clients', 'users'));
     }
 
     public function store(Request $request)
     {
-        $data = $request->validate([
-            'name'              => 'required|string|max:255',
-            'email'             => 'nullable|email|max:255',
-            'phone'             => 'nullable|string|max:50',
-            'company'           => 'nullable|string|max:255',
-            'source'            => 'nullable|string|max:100',
-            'value'             => 'nullable|numeric|min:0',
-            'notes'             => 'nullable|string',
-            'pipeline_id'       => 'required|exists:pipelines,id',
-            'pipeline_stage_id' => 'required|exists:pipeline_stages,id',
-            'assigned_to'       => 'nullable|exists:users,id',
-            'client_id'         => 'nullable|exists:clients,id',
-        ]);
+        $data = $request->validate($this->rules());
 
         Lead::create($data);
 
@@ -65,27 +50,14 @@ class LeadController extends Controller
 
     public function edit(Lead $lead)
     {
-        $pipelines = Pipeline::with('stages')->get();
-        $clients   = Client::orderBy('name')->get();
-        $users     = User::where('is_active', true)->get();
+        [$pipelines, $clients, $users] = $this->formData();
+
         return view('leads.edit', compact('lead', 'pipelines', 'clients', 'users'));
     }
 
     public function update(Request $request, Lead $lead)
     {
-        $data = $request->validate([
-            'name'              => 'required|string|max:255',
-            'email'             => 'nullable|email|max:255',
-            'phone'             => 'nullable|string|max:50',
-            'company'           => 'nullable|string|max:255',
-            'source'            => 'nullable|string|max:100',
-            'value'             => 'nullable|numeric|min:0',
-            'notes'             => 'nullable|string',
-            'pipeline_id'       => 'required|exists:pipelines,id',
-            'pipeline_stage_id' => 'required|exists:pipeline_stages,id',
-            'assigned_to'       => 'nullable|exists:users,id',
-            'client_id'         => 'nullable|exists:clients,id',
-        ]);
+        $data = $request->validate($this->rules());
 
         $lead->update($data);
 
@@ -113,5 +85,31 @@ class LeadController extends Controller
         $lead->delete();
 
         return redirect()->route('leads.index', ['pipeline_id' => $pipelineId])->with('success', 'Lead arquivado.');
+    }
+
+    private function rules(): array
+    {
+        return [
+            'name'              => 'required|string|max:255',
+            'email'             => 'nullable|email|max:255',
+            'phone'             => 'nullable|string|max:50',
+            'company'           => 'nullable|string|max:255',
+            'source'            => 'nullable|string|max:100',
+            'value'             => 'nullable|numeric|min:0',
+            'notes'             => 'nullable|string',
+            'pipeline_id'       => 'required|exists:pipelines,id',
+            'pipeline_stage_id' => 'required|exists:pipeline_stages,id',
+            'assigned_to'       => 'nullable|exists:users,id',
+            'client_id'         => 'nullable|exists:clients,id',
+        ];
+    }
+
+    private function formData(): array
+    {
+        return [
+            Pipeline::with('stages')->get(),
+            Client::orderBy('name')->get(),
+            User::where('is_active', true)->get(),
+        ];
     }
 }

@@ -26,11 +26,7 @@ class ProposalController extends Controller
 
     public function create(Request $request)
     {
-        $clients = Client::orderBy('name')->get();
-        $leads   = Lead::whereHas('stage', fn($q) => $q->where('is_won', false)->where('is_lost', false))
-            ->with('pipeline')->orderBy('name')->get();
-        $plans   = Plan::where('status', 'active')->get();
-
+        [$clients, $leads, $plans] = $this->formData();
         $selectedLead = $request->lead_id ? Lead::find($request->lead_id) : null;
 
         return view('proposals.create', compact('clients', 'leads', 'plans', 'selectedLead'));
@@ -38,37 +34,19 @@ class ProposalController extends Controller
 
     public function store(Request $request)
     {
-        $data = $request->validate([
-            'title'            => 'required|string|max:255',
-            'client_id'        => 'nullable|exists:clients,id',
-            'lead_id'          => 'nullable|exists:leads,id',
-            'items'            => 'nullable|array',
-            'items.*.description' => 'required|string',
-            'items.*.qty'         => 'required|numeric|min:0',
-            'items.*.unit_price'  => 'required|numeric|min:0',
-            'discount'         => 'nullable|numeric|min:0',
-            'notes'            => 'nullable|string',
-            'tracking_enabled' => 'boolean',
-            'expires_at'       => 'nullable|date',
-        ]);
-
-        $items    = $data['items'] ?? [];
-        $subtotal = collect($items)->sum(fn($i) => $i['qty'] * $i['unit_price']);
-        $discount = $data['discount'] ?? 0;
-
-        foreach ($items as &$item) {
-            $item['total'] = $item['qty'] * $item['unit_price'];
-        }
+        $data = $request->validate($this->rules());
+        [$items, $subtotal, $discount] = $this->calculateTotals($data);
 
         $proposal = Proposal::create([
             ...$data,
+            'items'            => $items,
             'created_by'       => auth()->id(),
             'subtotal'         => $subtotal,
             'total'            => $subtotal - $discount,
             'tracking_enabled' => $request->boolean('tracking_enabled', true),
         ]);
 
-        AuditLog::record('create', $proposal);
+        AuditLog::record('create', $proposal, [], ['title' => $proposal->title, 'total' => $proposal->total]);
 
         return redirect()->route('proposals.show', $proposal)->with('success', 'Proposta criada.');
     }
@@ -81,54 +59,34 @@ class ProposalController extends Controller
 
     public function edit(Proposal $proposal)
     {
-        $clients = Client::orderBy('name')->get();
-        $leads   = Lead::with('pipeline')->orderBy('name')->get();
-        $plans   = Plan::where('status', 'active')->get();
+        [$clients, $leads, $plans] = $this->formData(includeAllLeads: true);
+
         return view('proposals.edit', compact('proposal', 'clients', 'leads', 'plans'));
     }
 
     public function update(Request $request, Proposal $proposal)
     {
-        $data = $request->validate([
-            'title'            => 'required|string|max:255',
-            'client_id'        => 'nullable|exists:clients,id',
-            'lead_id'          => 'nullable|exists:leads,id',
-            'items'            => 'nullable|array',
-            'items.*.description' => 'required|string',
-            'items.*.qty'         => 'required|numeric|min:0',
-            'items.*.unit_price'  => 'required|numeric|min:0',
-            'discount'         => 'nullable|numeric|min:0',
-            'notes'            => 'nullable|string',
-            'tracking_enabled' => 'boolean',
-            'expires_at'       => 'nullable|date',
-        ]);
+        $data = $request->validate($this->rules());
+        [$items, $subtotal, $discount] = $this->calculateTotals($data);
 
-        $items    = $data['items'] ?? [];
-        $subtotal = collect($items)->sum(fn($i) => $i['qty'] * $i['unit_price']);
-        $discount = $data['discount'] ?? 0;
-
-        foreach ($items as &$item) {
-            $item['total'] = $item['qty'] * $item['unit_price'];
-        }
-
+        $old = $proposal->only(['title', 'total', 'status']);
         $proposal->update([
             ...$data,
+            'items'            => $items,
             'subtotal'         => $subtotal,
             'total'            => $subtotal - $discount,
             'tracking_enabled' => $request->boolean('tracking_enabled', true),
         ]);
+        AuditLog::record('update', $proposal, $old, ['title' => $proposal->title, 'total' => $proposal->total]);
 
         return redirect()->route('proposals.show', $proposal)->with('success', 'Proposta actualizada.');
     }
 
     public function send(Proposal $proposal)
     {
-        $proposal->update([
-            'status'  => 'sent',
-            'sent_at' => now(),
-        ]);
+        $proposal->update(['status' => 'sent', 'sent_at' => now()]);
 
-        AuditLog::record('update', $proposal, [], ['status' => 'sent'], 'Proposta enviada');
+        AuditLog::record('update', $proposal, ['status' => 'draft'], ['status' => 'sent'], 'Proposta enviada');
 
         return back()->with('success', 'Proposta marcada como enviada. Link: ' . $proposal->utm_url);
     }
@@ -136,10 +94,9 @@ class ProposalController extends Controller
     public function publicView(string $token)
     {
         $proposal = Proposal::where('token', $token)
-            ->whereNotIn('status', ['draft'])
+            ->where('status', '!=', 'draft')
             ->firstOrFail();
 
-        // Register view event
         if ($proposal->tracking_enabled) {
             TrackEvent::create([
                 'token'          => $token,
@@ -153,8 +110,9 @@ class ProposalController extends Controller
             ]);
         }
 
+        // Record first view only; subsequent opens keep the original viewed_at
         if ($proposal->status === 'sent') {
-            $proposal->update(['status' => 'viewed', 'viewed_at' => $proposal->viewed_at ?? now()]);
+            $proposal->update(['status' => 'viewed', 'viewed_at' => now()]);
         }
 
         $proposal->load('client', 'lead');
@@ -163,7 +121,10 @@ class ProposalController extends Controller
 
     public function accept(string $token)
     {
-        $proposal = Proposal::where('token', $token)->firstOrFail();
+        $proposal = Proposal::where('token', $token)
+            ->whereNotIn('status', ['draft', 'rejected'])
+            ->firstOrFail();
+
         $proposal->update(['status' => 'accepted']);
 
         return view('proposals.accepted', compact('proposal'));
@@ -179,7 +140,55 @@ class ProposalController extends Controller
 
     public function destroy(Proposal $proposal)
     {
+        AuditLog::record('delete', $proposal, $proposal->only(['title', 'total', 'status']));
         $proposal->delete();
+
         return redirect()->route('proposals.index')->with('success', 'Proposta arquivada.');
+    }
+
+    private function rules(): array
+    {
+        return [
+            'title'               => 'required|string|max:255',
+            'client_id'           => 'nullable|exists:clients,id',
+            'lead_id'             => 'nullable|exists:leads,id',
+            'items'               => 'nullable|array',
+            'items.*.description' => 'required_with:items|string',
+            'items.*.qty'         => 'required_with:items|numeric|min:0',
+            'items.*.unit_price'  => 'required_with:items|numeric|min:0',
+            'discount'            => 'nullable|numeric|min:0',
+            'notes'               => 'nullable|string',
+            'tracking_enabled'    => 'boolean',
+            'expires_at'          => 'nullable|date',
+        ];
+    }
+
+    /** @return array{array, float, float} [items, subtotal, discount] */
+    private function calculateTotals(array $data): array
+    {
+        $items    = $data['items'] ?? [];
+        $discount = (float) ($data['discount'] ?? 0);
+
+        $items = array_map(fn($i) => array_merge($i, [
+            'total' => (float) ($i['qty'] ?? 0) * (float) ($i['unit_price'] ?? 0),
+        ]), $items);
+
+        $subtotal = array_sum(array_column($items, 'total'));
+
+        return [$items, $subtotal, $discount];
+    }
+
+    private function formData(bool $includeAllLeads = false): array
+    {
+        $leads = $includeAllLeads
+            ? Lead::with('pipeline')->orderBy('name')->get()
+            : Lead::whereHas('stage', fn($q) => $q->where('is_won', false)->where('is_lost', false))
+                ->with('pipeline')->orderBy('name')->get();
+
+        return [
+            Client::orderBy('name')->get(),
+            $leads,
+            Plan::where('status', 'active')->get(),
+        ];
     }
 }

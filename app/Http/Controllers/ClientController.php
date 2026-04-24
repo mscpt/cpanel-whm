@@ -26,19 +26,7 @@ class ClientController extends Controller
 
     public function store(Request $request)
     {
-        $data = $request->validate([
-            'name'    => 'required|string|max:255',
-            'email'   => 'nullable|email|max:255',
-            'phone'   => 'nullable|string|max:50',
-            'document'=> 'nullable|string|max:50',
-            'type'    => 'required|in:person,company',
-            'address' => 'nullable|string|max:255',
-            'city'    => 'nullable|string|max:100',
-            'state'   => 'nullable|string|max:100',
-            'zip'     => 'nullable|string|max:20',
-            'country' => 'nullable|string|max:5',
-            'notes'   => 'nullable|string',
-        ]);
+        $data = $request->validate($this->rules());
 
         $client = Client::create($data);
         AuditLog::record('create', $client, [], $data);
@@ -65,21 +53,9 @@ class ClientController extends Controller
 
     public function update(Request $request, Client $client)
     {
-        $data = $request->validate([
-            'name'    => 'required|string|max:255',
-            'email'   => 'nullable|email|max:255',
-            'phone'   => 'nullable|string|max:50',
-            'document'=> 'nullable|string|max:50',
-            'type'    => 'required|in:person,company',
-            'address' => 'nullable|string|max:255',
-            'city'    => 'nullable|string|max:100',
-            'state'   => 'nullable|string|max:100',
-            'zip'     => 'nullable|string|max:20',
-            'country' => 'nullable|string|max:5',
-            'notes'   => 'nullable|string',
-        ]);
+        $data = $request->validate($this->rules());
 
-        $old = $client->toArray();
+        $old = $client->only(array_keys($data));
         $client->update($data);
         AuditLog::record('update', $client, $old, $data);
 
@@ -88,7 +64,7 @@ class ClientController extends Controller
 
     public function destroy(Client $client)
     {
-        AuditLog::record('delete', $client, $client->toArray());
+        AuditLog::record('delete', $client, $client->only(['name', 'email']));
         $client->delete();
 
         return redirect()->route('clients.index')->with('success', 'Cliente arquivado.');
@@ -107,7 +83,7 @@ class ClientController extends Controller
 
     public function anonymize(Client $client)
     {
-        $old = $client->toArray();
+        $old = $client->only(['name', 'email', 'phone', 'document', 'address']);
         $client->update([
             'name'     => 'Utilizador Anonimizado #' . $client->id,
             'email'    => null,
@@ -119,5 +95,22 @@ class ClientController extends Controller
         AuditLog::record('update', $client, $old, [], 'Anonimização RGPD');
 
         return redirect()->route('clients.show', $client)->with('success', 'Dados do cliente anonimizados (RGPD).');
+    }
+
+    private function rules(): array
+    {
+        return [
+            'name'    => 'required|string|max:255',
+            'email'   => 'nullable|email|max:255',
+            'phone'   => 'nullable|string|max:50',
+            'document'=> 'nullable|string|max:50',
+            'type'    => 'required|in:person,company',
+            'address' => 'nullable|string|max:255',
+            'city'    => 'nullable|string|max:100',
+            'state'   => 'nullable|string|max:100',
+            'zip'     => 'nullable|string|max:20',
+            'country' => 'nullable|string|max:5',
+            'notes'   => 'nullable|string',
+        ];
     }
 }

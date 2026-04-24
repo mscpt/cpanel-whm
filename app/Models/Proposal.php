@@ -62,7 +62,7 @@ class Proposal extends Model
 
     public function getUtmUrlAttribute(): string
     {
-        $slug = \Str::slug($this->title);
+        $slug = Str::slug($this->title);
         return url("/p/{$this->token}?utm_source=proposal&utm_medium=email&utm_campaign={$slug}");
     }
 }

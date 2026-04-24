@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Activity;
 use App\Models\Client;
 use App\Models\Contract;
 use App\Models\Lead;
@@ -27,12 +28,14 @@ class DashboardController extends Controller
             ->limit(10)
             ->get();
 
-        $pipelines = Pipeline::with(['stages.leads' => function ($q) {
-            $q->whereNull('deleted_at');
+        // withCount avoids loading all lead records just to call ->count() in the view
+        $pipelines = Pipeline::with(['stages' => function ($q) {
+            $q->withCount(['leads' => fn($q) => $q->whereNull('deleted_at')])
+              ->orderBy('order');
         }])->get();
 
-        $recentActivities = \App\Models\Activity::with(['user', 'activityable'])
-            ->latest()
+        $recentActivities = Activity::with('user')
+            ->latest('occurred_at')
             ->limit(8)
             ->get();
 

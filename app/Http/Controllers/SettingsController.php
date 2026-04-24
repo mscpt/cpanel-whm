@@ -5,10 +5,11 @@ namespace App\Http\Controllers;
 use App\Models\Setting;
 use App\Models\TrackEvent;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class SettingsController extends Controller
 {
-    private array $keys = [
+    private const KEYS = [
         'meta_pixel_id',
         'ga_measurement_id',
         'gtm_container_id',
@@ -23,15 +24,26 @@ class SettingsController extends Controller
 
     public function index()
     {
-        $settings = [];
-        foreach ($this->keys as $key) {
-            $settings[$key] = Setting::get($key, '');
+        $settings = Setting::whereIn('key', self::KEYS)
+            ->pluck('value', 'key')
+            ->toArray();
+
+        // Fill missing keys with empty string so the view never gets undefined
+        foreach (self::KEYS as $key) {
+            $settings[$key] ??= '';
         }
 
+        // Single query with conditional aggregation instead of three separate queries
+        $row = TrackEvent::selectRaw("
+            COUNT(*) as total,
+            SUM(CASE WHEN DATE(created_at) = DATE('now') THEN 1 ELSE 0 END) as today,
+            SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END) as this_week
+        ", [now()->startOfWeek()])->first();
+
         $trackStats = [
-            'total'    => TrackEvent::count(),
-            'today'    => TrackEvent::whereDate('created_at', today())->count(),
-            'this_week'=> TrackEvent::where('created_at', '>=', now()->startOfWeek())->count(),
+            'total'     => (int) $row->total,
+            'today'     => (int) $row->today,
+            'this_week' => (int) $row->this_week,
         ];
 
         return view('settings.index', compact('settings', 'trackStats'));
@@ -53,7 +65,7 @@ class SettingsController extends Controller
         ]);
 
         foreach ($data as $key => $value) {
-            Setting::set($key, $value);
+            Setting::set($key, $value ?? '');
         }
 
         return back()->with('success', 'Definições guardadas.');
